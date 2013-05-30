@@ -1,4 +1,4 @@
 study-meetings
 ==============
 
-I talked presentation samples at study meeting, conference, some meetup, and so on.
+Presentation samples I talked at study meeting, conference, some meetup, and so on.
