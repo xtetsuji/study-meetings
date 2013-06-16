@@ -1,0 +1,562 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>~/Documents/プレゼンテーション/Hachioji.pm#29/Util.pm.html</title>
+<meta name="Generator" content="Vim/7.3">
+<meta name="plugin-version" content="vim7.3_v6">
+<meta name="syntax" content="perl">
+<meta name="settings" content="use_css">
+<style type="text/css">
+<!--
+pre { font-family: monospace; color: #000000; background-color: #ffffff; }
+body { font-family: monospace; color: #000000; background-color: #ffffff; }
+.Comment { color: #0000c0; }
+.Special { color: #c000c0; }
+.Constant { color: #c00000; }
+.Identifier { color: #008080; }
+.Type { color: #008000; }
+.Statement { color: #af5f00; }
+-->
+</style>
+</head>
+<body>
+<pre>
+<span class="Statement">package</span><span class="Type"> Plack::Util</span>;
+<span class="Statement">use strict</span>;
+<span class="Statement">use </span>Carp ();
+<span class="Statement">use </span>Scalar::Util;
+<span class="Statement">use </span>IO::Handle;
+<span class="Statement">use overload</span> ();
+<span class="Statement">use </span>File::Spec ();
+
+<span class="Statement">sub </span><span class="Identifier">TRUE</span><span class="Type">()  </span>{ <span class="Constant">1</span>==<span class="Constant">1</span> }
+<span class="Statement">sub </span><span class="Identifier">FALSE</span><span class="Type">() </span>{ !TRUE }
+
+<span class="Statement">sub </span><span class="Identifier">load_class </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$class</span>, <span class="Identifier">$prefix</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">if</span> (<span class="Identifier">$prefix</span>) {
+        <span class="Statement">unless</span> (<span class="Identifier">$class</span> =~ <span class="Statement">s/</span><span class="Constant">^</span><span class="Special">\+</span><span class="Statement">//</span> || <span class="Identifier">$class</span> =~ <span class="Statement">/</span><span class="Constant">^</span><span class="Identifier">$prefix</span><span class="Statement">/</span>) {
+            <span class="Identifier">$class</span> = <span class="Constant">&quot;</span><span class="Identifier">$prefix</span><span class="Special">\:</span><span class="Constant">:</span><span class="Identifier">$class</span><span class="Constant">&quot;</span>;
+        }
+    }
+
+    <span class="Statement">my</span> <span class="Identifier">$file</span> = <span class="Identifier">$class</span>;
+    <span class="Identifier">$file</span> =~ <span class="Statement">s!</span><span class="Constant">::</span><span class="Statement">!</span><span class="Constant">/</span><span class="Statement">!g</span>;
+    <span class="Statement">require</span> <span class="Constant">&quot;</span><span class="Identifier">$file</span><span class="Constant">.pm</span><span class="Constant">&quot;</span>; <span class="Comment">## no critic</span>
+
+    <span class="Statement">return</span> <span class="Identifier">$class</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">is_real_fh </span><span class="Type">($) </span>{
+    <span class="Statement">my</span> <span class="Identifier">$fh</span> = <span class="Statement">shift</span>;
+
+    {
+        <span class="Statement">no warnings</span> <span class="Constant">'</span><span class="Constant">uninitialized</span><span class="Constant">'</span>;
+        <span class="Statement">return</span> FALSE <span class="Statement">if</span> <span class="Statement">-p</span> <span class="Identifier">$fh</span> <span class="Statement">or</span> <span class="Statement">-c</span> _ <span class="Statement">or</span> <span class="Statement">-b</span> _;
+    }
+
+    <span class="Statement">my</span> <span class="Identifier">$reftype</span> = Scalar::Util::reftype(<span class="Identifier">$fh</span>) <span class="Statement">or</span> <span class="Statement">return</span>;
+    <span class="Statement">if</span> (   <span class="Identifier">$reftype</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">IO</span><span class="Constant">'</span>
+        <span class="Statement">or</span> <span class="Identifier">$reftype</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">GLOB</span><span class="Constant">'</span> &amp;&amp; <span class="Identifier">*{$fh}</span><span class="Identifier">{</span><span class="Constant">IO</span><span class="Identifier">}</span>
+    ) {
+        <span class="Comment"># if it's a blessed glob make sure to not break encapsulation with</span>
+        <span class="Comment"># fileno($fh) (e.g. if you are filtering output then file descriptor</span>
+        <span class="Comment"># based operations might no longer be valid).</span>
+        <span class="Comment"># then ensure that the fileno *opcode* agrees too, that there is a</span>
+        <span class="Comment"># valid IO object inside $fh either directly or indirectly and that it</span>
+        <span class="Comment"># corresponds to a real file descriptor.</span>
+        <span class="Statement">my</span> <span class="Identifier">$m_fileno</span> = <span class="Identifier">$fh</span><span class="Identifier">-&gt;fileno</span>;
+        <span class="Statement">return</span> FALSE <span class="Statement">unless</span> <span class="Statement">defined</span> <span class="Identifier">$m_fileno</span>;
+        <span class="Statement">return</span> FALSE <span class="Statement">unless</span> <span class="Identifier">$m_fileno</span> &gt;= <span class="Constant">0</span>;
+
+        <span class="Statement">my</span> <span class="Identifier">$f_fileno</span> = <span class="Statement">fileno</span>(<span class="Identifier">$fh</span>);
+        <span class="Statement">return</span> FALSE <span class="Statement">unless</span> <span class="Statement">defined</span> <span class="Identifier">$f_fileno</span>;
+        <span class="Statement">return</span> FALSE <span class="Statement">unless</span> <span class="Identifier">$f_fileno</span> &gt;= <span class="Constant">0</span>;
+        <span class="Statement">return</span> TRUE;
+    } <span class="Statement">else</span> {
+        <span class="Comment"># anything else, including GLOBS without IO (even if they are blessed)</span>
+        <span class="Comment"># and non GLOB objects that look like filehandle objects cannot have a</span>
+        <span class="Comment"># valid file descriptor in fileno($fh) context so may break.</span>
+        <span class="Statement">return</span> FALSE;
+    }
+}
+
+<span class="Statement">sub </span><span class="Identifier">set_io_path </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$fh</span>, <span class="Identifier">$path</span>) = <span class="Identifier">@_</span>;
+    <span class="Statement">bless</span> <span class="Identifier">$fh</span>, <span class="Constant">'</span><span class="Constant">Plack::Util::IOWithPath</span><span class="Constant">'</span>;
+    <span class="Identifier">$fh</span><span class="Identifier">-&gt;path</span>(<span class="Identifier">$path</span>);
+}
+
+<span class="Statement">sub </span><span class="Identifier">content_length </span>{
+    <span class="Statement">my</span> <span class="Identifier">$body</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">return</span> <span class="Statement">unless</span> <span class="Statement">defined</span> <span class="Identifier">$body</span>;
+
+    <span class="Statement">if</span> (<span class="Statement">ref</span> <span class="Identifier">$body</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">ARRAY</span><span class="Constant">'</span>) {
+        <span class="Statement">my</span> <span class="Identifier">$cl</span> = <span class="Constant">0</span>;
+        <span class="Statement">for</span> <span class="Statement">my</span> <span class="Identifier">$chunk</span> (<span class="Identifier">@$body</span>) {
+            <span class="Identifier">$cl</span> += <span class="Statement">length</span> <span class="Identifier">$chunk</span>;
+        }
+        <span class="Statement">return</span> <span class="Identifier">$cl</span>;
+    } <span class="Statement">elsif</span> ( is_real_fh(<span class="Identifier">$body</span>) ) {
+        <span class="Statement">return</span> (<span class="Statement">-s</span> <span class="Identifier">$body</span>) - <span class="Statement">tell</span>(<span class="Identifier">$body</span>);
+    }
+
+    <span class="Statement">return</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">foreach </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$body</span>, <span class="Identifier">$cb</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">if</span> (<span class="Statement">ref</span> <span class="Identifier">$body</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">ARRAY</span><span class="Constant">'</span>) {
+        <span class="Statement">for</span> <span class="Statement">my</span> <span class="Identifier">$line</span> (<span class="Identifier">@$body</span>) {
+            <span class="Identifier">$cb</span>-&gt;(<span class="Identifier">$line</span>) <span class="Statement">if</span> <span class="Statement">length</span> <span class="Identifier">$line</span>;
+        }
+    } <span class="Statement">else</span> {
+        <span class="Statement">local</span> <span class="Identifier">$/</span> = \<span class="Constant">65536</span> <span class="Statement">unless</span> <span class="Statement">ref</span> <span class="Identifier">$/</span>;
+        <span class="Statement">while</span> (<span class="Statement">defined</span>(<span class="Statement">my</span> <span class="Identifier">$line</span> = <span class="Identifier">$body</span><span class="Identifier">-&gt;getline</span>)) {
+            <span class="Identifier">$cb</span>-&gt;(<span class="Identifier">$line</span>) <span class="Statement">if</span> <span class="Statement">length</span> <span class="Identifier">$line</span>;
+        }
+        <span class="Identifier">$body</span><span class="Identifier">-&gt;close</span>;
+    }
+}
+
+<span class="Statement">sub </span><span class="Identifier">class_to_file </span>{
+    <span class="Statement">my</span> <span class="Identifier">$class</span> = <span class="Statement">shift</span>;
+    <span class="Identifier">$class</span> =~ <span class="Statement">s!</span><span class="Constant">::</span><span class="Statement">!</span><span class="Constant">/</span><span class="Statement">!g</span>;
+    <span class="Identifier">$class</span> . <span class="Constant">&quot;</span><span class="Constant">.pm</span><span class="Constant">&quot;</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">_load_sandbox </span>{
+    <span class="Statement">my</span> <span class="Identifier">$_file</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$_package</span> = <span class="Identifier">$_file</span>;
+    <span class="Identifier">$_package</span> =~ <span class="Statement">s/</span><span class="Special">([^A-Za-z0-9_])</span><span class="Statement">/</span><span class="Constant">sprintf(&quot;_%2x&quot;, unpack(&quot;C&quot;, </span><span class="Identifier">$1</span><span class="Constant">))</span><span class="Statement">/eg</span>;
+
+    <span class="Statement">local</span> <span class="Identifier">$0</span> = <span class="Identifier">$_file</span>; <span class="Comment"># so FindBin etc. works</span>
+    <span class="Statement">local</span> <span class="Identifier">@ARGV</span> = ();  <span class="Comment"># Some frameworks might try to parse @ARGV</span>
+
+    <span class="Statement">return</span> <span class="Statement">eval</span> <span class="Statement">sprintf</span> <span class="Constant">&lt;&lt;'END_EVAL'</span><span class="Constant">, $_package;</span>
+<span class="Constant">package Plack::Sandbox::%s;</span>
+<span class="Constant">{</span>
+<span class="Constant">    my $app = do $_file;</span>
+<span class="Constant">    if ( !$app &amp;&amp; ( my $error = $@ || $! )) { die $error; }</span>
+<span class="Constant">    $app;</span>
+<span class="Constant">}</span>
+<span class="Constant">END_EVAL</span>
+}
+
+<span class="Statement">sub </span><span class="Identifier">load_psgi </span>{
+    <span class="Statement">my</span> <span class="Identifier">$stuff</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">local</span> <span class="Identifier">$ENV</span><span class="Identifier">{</span><span class="Constant">PLACK_ENV</span><span class="Identifier">}</span> = <span class="Identifier">$ENV</span><span class="Identifier">{</span><span class="Constant">PLACK_ENV</span><span class="Identifier">}</span> || <span class="Constant">'</span><span class="Constant">development</span><span class="Constant">'</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$file</span> = <span class="Identifier">$stuff</span> =~ <span class="Statement">/</span><span class="Constant">^[a-zA-Z0-9</span><span class="Special">\_\:</span><span class="Constant">]</span><span class="Special">+</span><span class="Constant">$</span><span class="Statement">/</span> ? class_to_file(<span class="Identifier">$stuff</span>) : File::Spec-&gt;rel2abs(<span class="Identifier">$stuff</span>);
+    <span class="Statement">my</span> <span class="Identifier">$app</span> = _load_sandbox(<span class="Identifier">$file</span>);
+    <span class="Statement">die</span> <span class="Constant">&quot;</span><span class="Constant">Error while loading </span><span class="Identifier">$file</span><span class="Constant">: </span><span class="Identifier">$@</span><span class="Constant">&quot;</span> <span class="Statement">if</span> <span class="Identifier">$@</span>;
+
+    <span class="Statement">return</span> <span class="Identifier">$app</span><span class="Identifier">-&gt;to_app</span> <span class="Statement">if</span> <span class="Identifier">$app</span> <span class="Statement">and</span> Scalar::Util::blessed(<span class="Identifier">$app</span>) <span class="Statement">and</span> <span class="Identifier">$app</span><span class="Identifier">-&gt;can</span>(<span class="Constant">'</span><span class="Constant">to_app</span><span class="Constant">'</span>);
+    <span class="Statement">return</span> <span class="Identifier">$app</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">run_app</span><span class="Type">($$) </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$app</span>, <span class="Identifier">$env</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">return</span> <span class="Statement">eval</span> { <span class="Identifier">$app</span>-&gt;(<span class="Identifier">$env</span>) } || <span class="Statement">do</span> {
+        <span class="Statement">my</span> <span class="Identifier">$body</span> = <span class="Constant">&quot;</span><span class="Constant">Internal Server Error</span><span class="Constant">&quot;</span>;
+        <span class="Identifier">$env-&gt;{</span><span class="Constant">'</span><span class="Constant">psgi.errors</span><span class="Constant">'</span><span class="Identifier">}</span><span class="Identifier">-&gt;print</span>(<span class="Identifier">$@</span>);
+        [ <span class="Constant">500</span>, [ <span class="Constant">'</span><span class="Constant">Content-Type</span><span class="Constant">'</span> =&gt; <span class="Constant">'</span><span class="Constant">text/plain</span><span class="Constant">'</span>, <span class="Constant">'</span><span class="Constant">Content-Length</span><span class="Constant">'</span> =&gt; <span class="Statement">length</span>(<span class="Identifier">$body</span>) ], [ <span class="Identifier">$body</span> ] ];
+    };
+}
+
+<span class="Statement">sub </span><span class="Identifier">headers </span>{
+    <span class="Statement">my</span> <span class="Identifier">$headers</span> = <span class="Statement">shift</span>;
+    inline_object(
+        <span class="Constant">iter</span>   =&gt; <span class="Statement">sub </span>{ header_iter(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">get</span>    =&gt; <span class="Statement">sub </span>{ header_get(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">set</span>    =&gt; <span class="Statement">sub </span>{ header_set(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">push</span>   =&gt; <span class="Statement">sub </span>{ header_push(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">exists</span> =&gt; <span class="Statement">sub </span>{ header_exists(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">remove</span> =&gt; <span class="Statement">sub </span>{ header_remove(<span class="Identifier">$headers</span>, <span class="Identifier">@_</span>) },
+        <span class="Constant">headers</span> =&gt; <span class="Statement">sub </span>{ <span class="Identifier">$headers</span> },
+    );
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_iter </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$code</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">@headers</span> = <span class="Identifier">@$headers</span>; <span class="Comment"># copy</span>
+    <span class="Statement">while</span> (<span class="Statement">my</span>(<span class="Identifier">$key</span>, <span class="Identifier">$val</span>) = <span class="Statement">splice</span> <span class="Identifier">@headers</span>, <span class="Constant">0</span>, <span class="Constant">2</span>) {
+        <span class="Identifier">$code</span>-&gt;(<span class="Identifier">$key</span>, <span class="Identifier">$val</span>);
+    }
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_get </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$key</span>) = (<span class="Statement">shift</span>, <span class="Statement">lc</span> <span class="Statement">shift</span>);
+
+    <span class="Statement">my</span> <span class="Identifier">@val</span>;
+    header_iter <span class="Identifier">$headers</span>, <span class="Statement">sub </span>{
+        <span class="Statement">push</span> <span class="Identifier">@val</span>, <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span> <span class="Statement">if</span> <span class="Statement">lc</span> <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span> <span class="Statement">eq</span> <span class="Identifier">$key</span>;
+    };
+
+    <span class="Statement">return</span> <span class="Statement">wantarray</span> ? <span class="Identifier">@val</span> : <span class="Identifier">$val[</span><span class="Constant">0</span><span class="Identifier">]</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_set </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$key</span>, <span class="Identifier">$val</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">my</span>(<span class="Identifier">$set</span>, <span class="Identifier">@new_headers</span>);
+    header_iter <span class="Identifier">$headers</span>, <span class="Statement">sub </span>{
+        <span class="Statement">if</span> (<span class="Statement">lc</span> <span class="Identifier">$key</span> <span class="Statement">eq</span> <span class="Statement">lc</span> <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span>) {
+            <span class="Statement">return</span> <span class="Statement">if</span> <span class="Identifier">$set</span>;
+            <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span> = <span class="Identifier">$val</span>;
+            <span class="Identifier">$set</span>++;
+        }
+        <span class="Statement">push</span> <span class="Identifier">@new_headers</span>, <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span>, <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span>;
+    };
+
+    <span class="Statement">push</span> <span class="Identifier">@new_headers</span>, <span class="Identifier">$key</span>, <span class="Identifier">$val</span> <span class="Statement">unless</span> <span class="Identifier">$set</span>;
+    <span class="Identifier">@$headers</span> = <span class="Identifier">@new_headers</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_push </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$key</span>, <span class="Identifier">$val</span>) = <span class="Identifier">@_</span>;
+    <span class="Statement">push</span> <span class="Identifier">@$headers</span>, <span class="Identifier">$key</span>, <span class="Identifier">$val</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_exists </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$key</span>) = (<span class="Statement">shift</span>, <span class="Statement">lc</span> <span class="Statement">shift</span>);
+
+    <span class="Statement">my</span> <span class="Identifier">$exists</span>;
+    header_iter <span class="Identifier">$headers</span>, <span class="Statement">sub </span>{
+        <span class="Identifier">$exists</span> = <span class="Constant">1</span> <span class="Statement">if</span> <span class="Statement">lc</span> <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span> <span class="Statement">eq</span> <span class="Identifier">$key</span>;
+    };
+
+    <span class="Statement">return</span> <span class="Identifier">$exists</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">header_remove </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$headers</span>, <span class="Identifier">$key</span>) = (<span class="Statement">shift</span>, <span class="Statement">lc</span> <span class="Statement">shift</span>);
+
+    <span class="Statement">my</span> <span class="Identifier">@new_headers</span>;
+    header_iter <span class="Identifier">$headers</span>, <span class="Statement">sub </span>{
+        <span class="Statement">push</span> <span class="Identifier">@new_headers</span>, <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span>, <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span>
+            <span class="Statement">unless</span> <span class="Statement">lc</span> <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span> <span class="Statement">eq</span> <span class="Identifier">$key</span>;
+    };
+
+    <span class="Identifier">@$headers</span> = <span class="Identifier">@new_headers</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">status_with_no_entity_body </span>{
+    <span class="Statement">my</span> <span class="Identifier">$status</span> = <span class="Statement">shift</span>;
+    <span class="Statement">return</span> <span class="Identifier">$status</span> &lt; <span class="Constant">200</span> || <span class="Identifier">$status</span> == <span class="Constant">204</span> || <span class="Identifier">$status</span> == <span class="Constant">304</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">encode_html </span>{
+    <span class="Statement">my</span> <span class="Identifier">$str</span> = <span class="Statement">shift</span>;
+    <span class="Identifier">$str</span> =~ <span class="Statement">s/</span><span class="Constant">&amp;</span><span class="Statement">/</span><span class="Constant">&amp;amp;</span><span class="Statement">/g</span>;
+    <span class="Identifier">$str</span> =~ <span class="Statement">s/</span><span class="Constant">&gt;</span><span class="Statement">/</span><span class="Constant">&amp;gt;</span><span class="Statement">/g</span>;
+    <span class="Identifier">$str</span> =~ <span class="Statement">s/</span><span class="Constant">&lt;</span><span class="Statement">/</span><span class="Constant">&amp;lt;</span><span class="Statement">/g</span>;
+    <span class="Identifier">$str</span> =~ <span class="Statement">s/</span><span class="Constant">&quot;</span><span class="Statement">/</span><span class="Constant">&amp;quot;</span><span class="Statement">/g</span>;
+    <span class="Identifier">$str</span> =~ <span class="Statement">s/</span><span class="Constant">'</span><span class="Statement">/</span><span class="Constant">&amp;#39;</span><span class="Statement">/g</span>;
+    <span class="Statement">return</span> <span class="Identifier">$str</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">inline_object </span>{
+    <span class="Statement">my</span> <span class="Identifier">%args</span> = <span class="Identifier">@_</span>;
+    <span class="Statement">bless</span> \<span class="Identifier">%args</span>, <span class="Constant">'</span><span class="Constant">Plack::Util::Prototype</span><span class="Constant">'</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">response_cb </span>{
+    <span class="Statement">my</span>(<span class="Identifier">$res</span>, <span class="Identifier">$cb</span>) = <span class="Identifier">@_</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$body_filter</span> = <span class="Statement">sub </span>{
+        <span class="Statement">my</span>(<span class="Identifier">$cb</span>, <span class="Identifier">$res</span>) = <span class="Identifier">@_</span>;
+        <span class="Statement">my</span> <span class="Identifier">$filter_cb</span> = <span class="Identifier">$cb</span>-&gt;(<span class="Identifier">$res</span>);
+        <span class="Comment"># If response_cb returns a callback, treat it as a $body filter</span>
+        <span class="Statement">if</span> (<span class="Statement">defined</span> <span class="Identifier">$filter_cb</span> &amp;&amp; <span class="Statement">ref</span> <span class="Identifier">$filter_cb</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">CODE</span><span class="Constant">'</span>) {
+            Plack::Util::header_remove(<span class="Identifier">$res-&gt;[</span><span class="Constant">1</span><span class="Identifier">]</span>, <span class="Constant">'</span><span class="Constant">Content-Length</span><span class="Constant">'</span>);
+            <span class="Statement">if</span> (<span class="Statement">defined</span> <span class="Identifier">$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]</span>) {
+                <span class="Statement">if</span> (<span class="Statement">ref</span> <span class="Identifier">$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">ARRAY</span><span class="Constant">'</span>) {
+                    <span class="Statement">for</span> <span class="Statement">my</span> <span class="Identifier">$line</span> (<span class="Identifier">@{$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]}</span>) {
+                        <span class="Identifier">$line</span> = <span class="Identifier">$filter_cb</span>-&gt;(<span class="Identifier">$line</span>);
+                    }
+                    <span class="Comment"># Send EOF.</span>
+                    <span class="Statement">my</span> <span class="Identifier">$eof</span> = <span class="Identifier">$filter_cb</span>-&gt;( <span class="Statement">undef</span> );
+                    <span class="Statement">push</span> <span class="Identifier">@{</span> <span class="Identifier">$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]</span> <span class="Identifier">}</span>, <span class="Identifier">$eof</span> <span class="Statement">if</span> <span class="Statement">defined</span> <span class="Identifier">$eof</span>;
+                } <span class="Statement">else</span> {
+                    <span class="Statement">my</span> <span class="Identifier">$body</span>    = <span class="Identifier">$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]</span>;
+                    <span class="Statement">my</span> <span class="Identifier">$getline</span> = <span class="Statement">sub </span>{ <span class="Identifier">$body</span><span class="Identifier">-&gt;getline</span> };
+                    <span class="Identifier">$res-&gt;[</span><span class="Constant">2</span><span class="Identifier">]</span> = Plack::Util::inline_object
+                        <span class="Constant">getline</span> =&gt; <span class="Statement">sub </span>{ <span class="Identifier">$filter_cb</span>-&gt;(<span class="Identifier">$getline</span>-&gt;()) },
+                        <span class="Constant">close</span> =&gt; <span class="Statement">sub </span>{ <span class="Identifier">$body</span><span class="Identifier">-&gt;close</span> };
+                }
+            } <span class="Statement">else</span> {
+                <span class="Statement">return</span> <span class="Identifier">$filter_cb</span>;
+            }
+        }
+    };
+
+    <span class="Statement">if</span> (<span class="Statement">ref</span> <span class="Identifier">$res</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">ARRAY</span><span class="Constant">'</span>) {
+        <span class="Identifier">$body_filter</span>-&gt;(<span class="Identifier">$cb</span>, <span class="Identifier">$res</span>);
+        <span class="Statement">return</span> <span class="Identifier">$res</span>;
+    } <span class="Statement">elsif</span> (<span class="Statement">ref</span> <span class="Identifier">$res</span> <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">CODE</span><span class="Constant">'</span>) {
+        <span class="Statement">return</span> <span class="Statement">sub </span>{
+            <span class="Statement">my</span> <span class="Identifier">$respond</span> = <span class="Statement">shift</span>;
+            <span class="Statement">my</span> <span class="Identifier">$cb</span> = <span class="Identifier">$cb</span>;  <span class="Comment"># To avoid the nested closure leak for 5.8.x</span>
+            <span class="Identifier">$res</span>-&gt;(<span class="Statement">sub </span>{
+                <span class="Statement">my</span> <span class="Identifier">$res</span> = <span class="Statement">shift</span>;
+                <span class="Statement">my</span> <span class="Identifier">$filter_cb</span> = <span class="Identifier">$body_filter</span>-&gt;(<span class="Identifier">$cb</span>, <span class="Identifier">$res</span>);
+                <span class="Statement">if</span> (<span class="Identifier">$filter_cb</span>) {
+                    <span class="Statement">my</span> <span class="Identifier">$writer</span> = <span class="Identifier">$respond</span>-&gt;(<span class="Identifier">$res</span>);
+                    <span class="Statement">if</span> (<span class="Identifier">$writer</span>) {
+                        <span class="Statement">return</span> Plack::Util::inline_object
+                            <span class="Constant">write</span> =&gt; <span class="Statement">sub </span>{ <span class="Identifier">$writer</span><span class="Identifier">-&gt;write</span>(<span class="Identifier">$filter_cb</span>-&gt;(<span class="Identifier">@_</span>)) },
+                            <span class="Constant">close</span> =&gt; <span class="Statement">sub </span>{
+                                <span class="Statement">my</span> <span class="Identifier">$chunk</span> = <span class="Identifier">$filter_cb</span>-&gt;(<span class="Statement">undef</span>);
+                                <span class="Identifier">$writer</span><span class="Identifier">-&gt;write</span>(<span class="Identifier">$chunk</span>) <span class="Statement">if</span> <span class="Statement">defined</span> <span class="Identifier">$chunk</span>;
+                                <span class="Identifier">$writer</span><span class="Identifier">-&gt;close</span>;
+                            };
+                    }
+                } <span class="Statement">else</span> {
+                    <span class="Statement">return</span> <span class="Identifier">$respond</span>-&gt;(<span class="Identifier">$res</span>);
+                }
+            });
+        };
+    }
+
+    <span class="Statement">return</span> <span class="Identifier">$res</span>;
+}
+
+<span class="Statement">package</span><span class="Type"> Plack::Util::Prototype</span>;
+
+<span class="Statement">our</span> <span class="Identifier">$AUTOLOAD</span>;
+<span class="Statement">sub </span><span class="Identifier">can </span>{
+    <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]-&gt;{$_[</span><span class="Constant">1</span><span class="Identifier">]}</span>;
+}
+
+<span class="Statement">sub </span><span class="Identifier">AUTOLOAD </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+    <span class="Statement">my</span> <span class="Identifier">$attr</span> = <span class="Identifier">$AUTOLOAD</span>;
+    <span class="Identifier">$attr</span> =~ <span class="Statement">s/</span><span class="Special">.*</span><span class="Constant">:</span><span class="Statement">//</span>;
+    <span class="Statement">if</span> (<span class="Statement">ref</span>(<span class="Identifier">$self-&gt;{$attr}</span>) <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">CODE</span><span class="Constant">'</span>) {
+        <span class="Identifier">$self-&gt;{$attr}</span>-&gt;(<span class="Identifier">@_</span>);
+    } <span class="Statement">else</span> {
+        Carp::croak(<span class="Constant">qq/</span><span class="Constant">Can't locate object method &quot;</span><span class="Identifier">$attr</span><span class="Constant">&quot; via package &quot;Plack::Util::Prototype&quot;</span><span class="Constant">/</span>);
+    }
+}
+
+<span class="Statement">sub </span><span class="Identifier">DESTROY </span>{ }
+
+<span class="Statement">package</span><span class="Type"> Plack::Util::IOWithPath</span>;
+<span class="Statement">use parent</span> <span class="Constant">qw(</span><span class="Constant">IO::Handle</span><span class="Constant">)</span>;
+
+<span class="Statement">sub </span><span class="Identifier">path </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+    <span class="Statement">if</span> (<span class="Identifier">@_</span>) {
+        <span class="Identifier">${</span>*<span class="Identifier">$self}{</span>+__PACKAGE__<span class="Identifier">}</span> = <span class="Statement">shift</span>;
+    }
+    <span class="Identifier">${</span>*<span class="Identifier">$self}{</span>+__PACKAGE__<span class="Identifier">}</span>;
+}
+
+<span class="Statement">package</span><span class="Type"> Plack::Util</span>;
+
+<span class="Constant">1</span>;
+
+<span class="Comment">__END__</span>
+
+<span class="Comment">=head1 NAME</span>
+
+<span class="Comment">Plack::Util - Utility subroutines for Plack server and framework developers</span>
+
+<span class="Comment">=head1 FUNCTIONS</span>
+
+<span class="Comment">=over 4</span>
+
+<span class="Comment">=item TRUE, FALSE</span>
+
+<span class="Comment">  my $true  = Plack::Util::TRUE;</span>
+<span class="Comment">  my $false = Plack::Util::FALSE;</span>
+
+<span class="Comment">Utility constants to include when you specify boolean variables in C&lt;$env&gt; hash (e.g. C&lt;psgi.multithread&gt;).</span>
+
+<span class="Comment">=item load_class</span>
+
+<span class="Comment">  my $class = Plack::Util::load_class($class [, $prefix ]);</span>
+
+<span class="Comment">Constructs a class name and C&lt;require&gt; the class. Throws an exception</span>
+<span class="Comment">if the .pm file for the class is not found, just with the built-in</span>
+<span class="Comment">C&lt;require&gt;.</span>
+
+<span class="Comment">If C&lt;$prefix&gt; is set, the class name is prepended to the C&lt;$class&gt;</span>
+<span class="Comment">unless C&lt;$class&gt; begins with C&lt;+&gt; sign, which means the class name is</span>
+<span class="Comment">already fully qualified.</span>
+
+<span class="Comment">  my $class = Plack::Util::load_class(&quot;Foo&quot;);                   # Foo</span>
+<span class="Comment">  my $class = Plack::Util::load_class(&quot;Baz&quot;, &quot;Foo::Bar&quot;);       # Foo::Bar::Baz</span>
+<span class="Comment">  my $class = Plack::Util::load_class(&quot;+XYZ::ZZZ&quot;, &quot;Foo::Bar&quot;); # XYZ::ZZZ</span>
+
+<span class="Comment">Note that this function doesn't validate (or &quot;sanitize&quot;) the passed</span>
+<span class="Comment">string, hence if you pass a user input to this function (which is an</span>
+<span class="Comment">insecure thing to do in the first place) it might lead to unexpected</span>
+<span class="Comment">behavior of loading files outside your C&lt;@INC&gt; path. If you want a</span>
+<span class="Comment">generic module loading function, you should check out CPAN modules</span>
+<span class="Comment">such as L&lt;Module::Runtime&gt;.</span>
+
+<span class="Comment">=item is_real_fh</span>
+
+<span class="Comment">  if ( Plack::Util::is_real_fh($fh) ) { }</span>
+
+<span class="Comment">returns true if a given C&lt;$fh&gt; is a real file handle that has a file</span>
+<span class="Comment">descriptor. It returns false if C&lt;$fh&gt; is PerlIO handle that is not</span>
+<span class="Comment">really related to the underlying file etc.</span>
+
+<span class="Comment">=item content_length</span>
+
+<span class="Comment">  my $cl = Plack::Util::content_length($body);</span>
+
+<span class="Comment">Returns the length of content from body if it can be calculated. If</span>
+<span class="Comment">C&lt;$body&gt; is an array ref it's a sum of length of each chunk, if</span>
+<span class="Comment">C&lt;$body&gt; is a real filehandle it's a remaining size of the filehandle,</span>
+<span class="Comment">otherwise returns undef.</span>
+
+<span class="Comment">=item set_io_path</span>
+
+<span class="Comment">  Plack::Util::set_io_path($fh, &quot;/path/to/foobar.txt&quot;);</span>
+
+<span class="Comment">Sets the (absolute) file path to C&lt;$fh&gt; filehandle object, so you can</span>
+<span class="Comment">call C&lt;&lt; $fh-&gt;path &gt;&gt; on it. As a side effect C&lt;$fh&gt; is blessed to an</span>
+<span class="Comment">internal package but it can still be treated as a normal file</span>
+<span class="Comment">handle.</span>
+
+<span class="Comment">This module doesn't normalize or absolutize the given path, and is</span>
+<span class="Comment">intended to be used from Server or Middleware implementations. See</span>
+<span class="Comment">also L&lt;IO::File::WithPath&gt;.</span>
+
+<span class="Comment">=item foreach</span>
+
+<span class="Comment">  Plack::Util::foreach($body, $cb);</span>
+
+<span class="Comment">Iterate through I&lt;$body&gt; which is an array reference or</span>
+<span class="Comment">IO::Handle-like object and pass each line (which is NOT really</span>
+<span class="Comment">guaranteed to be a I&lt;line&gt;) to the callback function.</span>
+
+<span class="Comment">It internally sets the buffer length C&lt;$/&gt; to 65536 in case it reads</span>
+<span class="Comment">the binary file, unless otherwise set in the caller's code.</span>
+
+<span class="Comment">=item load_psgi</span>
+
+<span class="Comment">  my $app = Plack::Util::load_psgi $psgi_file_or_class;</span>
+
+<span class="Comment">Load C&lt;app.psgi&gt; file or a class name (like C&lt;MyApp::PSGI&gt;) and</span>
+<span class="Comment">require the file to get PSGI application handler. If the file can't be</span>
+<span class="Comment">loaded (e.g. file doesn't exist or has a perl syntax error), it will</span>
+<span class="Comment">throw an exception.</span>
+
+<span class="Comment">Since version 1.0006, this function would not load PSGI files from</span>
+<span class="Comment">include paths (C&lt;@INC&gt;) unless it looks like a class name that only</span>
+<span class="Comment">consists of C&lt;[A-Za-z0-9_:]&gt;. For example:</span>
+
+<span class="Comment">  Plack::Util::load_psgi(&quot;app.psgi&quot;);          # ./app.psgi</span>
+<span class="Comment">  Plack::Util::load_psgi(&quot;/path/to/app.psgi&quot;); # /path/to/app.psgi</span>
+<span class="Comment">  Plack::Util::load_psgi(&quot;MyApp::PSGI&quot;);       # MyApp/PSGI.pm from @INC</span>
+
+<span class="Comment">B&lt;Security&gt;: If you give this function a class name or module name</span>
+<span class="Comment">that is loadable from your system, it will load the module. This could</span>
+<span class="Comment">lead to a security hole:</span>
+
+<span class="Comment">  my $psgi = ...; # user-input: consider &quot;Moose&quot;</span>
+<span class="Comment">  $app = Plack::Util::load_psgi($psgi); # this would lead to 'require &quot;Moose.pm&quot;'!</span>
+
+<span class="Comment">Generally speaking, passing an external input to this function is</span>
+<span class="Comment">considered very insecure. If you really want to do that, validate that</span>
+<span class="Comment">a given file name contains dots (like C&lt;foo.psgi&gt;) and also turn it</span>
+<span class="Comment">into a full path in your caller's code.</span>
+
+<span class="Comment">=item run_app</span>
+
+<span class="Comment">  my $res = Plack::Util::run_app $app, $env;</span>
+
+<span class="Comment">Runs the I&lt;$app&gt; by wrapping errors with I&lt;eval&gt; and if an error is</span>
+<span class="Comment">found, logs it to C&lt;&lt; $env-&gt;{'psgi.errors'} &gt;&gt; and returns the</span>
+<span class="Comment">template 500 Error response.</span>
+
+<span class="Comment">=item header_get, header_exists, header_set, header_push, header_remove</span>
+
+<span class="Comment">  my $hdrs = [ 'Content-Type' =&gt; 'text/plain' ];</span>
+
+<span class="Comment">  my $v = Plack::Util::header_get($hdrs, $key); # First found only</span>
+<span class="Comment">  my @v = Plack::Util::header_get($hdrs, $key);</span>
+<span class="Comment">  my $bool = Plack::Util::header_exists($hdrs, $key);</span>
+<span class="Comment">  Plack::Util::header_set($hdrs, $key, $val);   # overwrites existent header</span>
+<span class="Comment">  Plack::Util::header_push($hdrs, $key, $val);</span>
+<span class="Comment">  Plack::Util::header_remove($hdrs, $key);</span>
+
+<span class="Comment">Utility functions to manipulate PSGI response headers array</span>
+<span class="Comment">reference. The methods that read existent header value handles header</span>
+<span class="Comment">name as case insensitive.</span>
+
+<span class="Comment">  my $hdrs = [ 'Content-Type' =&gt; 'text/plain' ];</span>
+<span class="Comment">  my $v = Plack::Util::header_get($hdrs, 'content-type'); # 'text/plain'</span>
+
+<span class="Comment">=item headers</span>
+
+<span class="Comment">  my $headers = [ 'Content-Type' =&gt; 'text/plain' ];</span>
+
+<span class="Comment">  my $h = Plack::Util::headers($headers);</span>
+<span class="Comment">  $h-&gt;get($key);</span>
+<span class="Comment">  if ($h-&gt;exists($key)) { ... }</span>
+<span class="Comment">  $h-&gt;set($key =&gt; $val);</span>
+<span class="Comment">  $h-&gt;push($key =&gt; $val);</span>
+<span class="Comment">  $h-&gt;remove($key);</span>
+<span class="Comment">  $h-&gt;headers; # same reference as $headers</span>
+
+<span class="Comment">Given a header array reference, returns a convenient object that has</span>
+<span class="Comment">an instance methods to access C&lt;header_*&gt; functions with an OO</span>
+<span class="Comment">interface. The object holds a reference to the original given</span>
+<span class="Comment">C&lt;$headers&gt; argument and updates the reference accordingly when called</span>
+<span class="Comment">write methods like C&lt;set&gt;, C&lt;push&gt; or C&lt;remove&gt;. It also has C&lt;headers&gt;</span>
+<span class="Comment">method that would return the same reference.</span>
+
+<span class="Comment">=item status_with_no_entity_body</span>
+
+<span class="Comment">  if (status_with_no_entity_body($res-&gt;[0])) { }</span>
+
+<span class="Comment">Returns true if the given status code doesn't have any Entity body in</span>
+<span class="Comment">HTTP response, i.e. it's 100, 101, 204 or 304.</span>
+
+<span class="Comment">=item inline_object</span>
+
+<span class="Comment">  my $o = Plack::Util::inline_object(</span>
+<span class="Comment">      write =&gt; sub { $h-&gt;push_write(@_) },</span>
+<span class="Comment">      close =&gt; sub { $h-&gt;push_shutdown },</span>
+<span class="Comment">  );</span>
+<span class="Comment">  $o-&gt;write(@stuff);</span>
+<span class="Comment">  $o-&gt;close;</span>
+
+<span class="Comment">Creates an instant object that can react to methods passed in the</span>
+<span class="Comment">constructor. Handy to create when you need to create an IO stream</span>
+<span class="Comment">object for input or errors.</span>
+
+<span class="Comment">=item encode_html</span>
+
+<span class="Comment">  my $encoded_string = Plack::Util::encode( $string );</span>
+
+<span class="Comment">Entity encodes C&lt;&lt;&gt;, C&lt;&lt; &gt; &gt;&gt;, C&lt;&amp;&gt;, C&lt;&quot;&gt; and C&lt;'&gt; in the input string</span>
+<span class="Comment">and returns it.</span>
+
+<span class="Comment">=item response_cb</span>
+
+<span class="Comment">See L&lt;Plack::Middleware/RESPONSE CALLBACK&gt; for details.</span>
+
+<span class="Comment">=back</span>
+
+<span class="Comment">=cut</span>
+
+
+
+</pre>
+</body>
+</html>

@@ -1,0 +1,1084 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>~/Documents/プレゼンテーション/Hachioji.pm#29/RegistryCooker.pm.html</title>
+<meta name="Generator" content="Vim/7.3">
+<meta name="plugin-version" content="vim7.3_v6">
+<meta name="syntax" content="perl">
+<meta name="settings" content="use_css">
+<style type="text/css">
+<!--
+pre { font-family: monospace; color: #000000; background-color: #ffffff; }
+body { font-family: monospace; color: #000000; background-color: #ffffff; }
+.Special { color: #c000c0; }
+.PreProc { color: #c000c0; }
+.Todo { color: #000000; background-color: #ffff00; }
+.Identifier { color: #008080; }
+.Constant { color: #c00000; }
+.Type { color: #008000; }
+.Statement { color: #af5f00; }
+.Comment { color: #0000c0; }
+-->
+</style>
+</head>
+<body>
+<pre>
+<span class="Comment"># Licensed to the Apache Software Foundation (ASF) under one or more</span>
+<span class="Comment"># contributor license agreements.  See the NOTICE file distributed with</span>
+<span class="Comment"># this work for additional information regarding copyright ownership.</span>
+<span class="Comment"># The ASF licenses this file to You under the Apache License, Version 2.0</span>
+<span class="Comment"># (the &quot;License&quot;); you may not use this file except in compliance with</span>
+<span class="Comment"># the License.  You may obtain a copy of the License at</span>
+<span class="Comment">#</span>
+<span class="Comment">#     <a href="http://www.apache.org/licenses/LICENSE-2.0">http://www.apache.org/licenses/LICENSE-2.0</a></span>
+<span class="Comment">#</span>
+<span class="Comment"># Unless required by applicable law or agreed to in writing, software</span>
+<span class="Comment"># distributed under the License is distributed on an &quot;AS IS&quot; BASIS,</span>
+<span class="Comment"># WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</span>
+<span class="Comment"># See the License for the specific language governing permissions and</span>
+<span class="Comment"># limitations under the License.</span>
+<span class="Comment">#</span>
+<span class="Comment"># VERY IMPORTANT: Be very careful modifying the defaults, since many</span>
+<span class="Comment"># VERY IMPORTANT: packages rely on them. In fact you should never</span>
+<span class="Comment"># VERY IMPORTANT: modify the defaults after the package gets released,</span>
+<span class="Comment"># VERY IMPORTANT: since they are a hardcoded part of this suite's API.</span>
+
+<span class="Statement">package</span><span class="Type"> ModPerl::RegistryCooker</span>;
+
+<span class="Statement">require</span> <span class="Constant">5.006</span>;
+
+<span class="Statement">use strict</span>;
+<span class="Statement">use warnings</span> <span class="Constant">FATAL</span> =&gt; <span class="Constant">'</span><span class="Constant">all</span><span class="Constant">'</span>;
+
+<span class="Statement">our</span> <span class="Identifier">$VERSION</span> = <span class="Constant">'</span><span class="Constant">1.99</span><span class="Constant">'</span>;
+
+<span class="Statement">use </span>Apache2::ServerUtil ();
+<span class="Statement">use </span>Apache2::Response ();
+<span class="Statement">use </span>Apache2::RequestRec ();
+<span class="Statement">use </span>Apache2::RequestUtil ();
+<span class="Statement">use </span>Apache2::RequestIO ();
+<span class="Statement">use </span>Apache2::Log ();
+<span class="Statement">use </span>Apache2::Access ();
+
+<span class="Statement">use </span>APR::Table ();
+<span class="Statement">use </span>APR::Status ();
+
+<span class="Statement">use </span>ModPerl::Util ();
+<span class="Statement">use </span>ModPerl::Global ();
+
+<span class="Statement">use </span>File::Spec::Functions ();
+<span class="Statement">use </span>File::Basename ();
+
+<span class="Statement">use </span>Apache2::Const <span class="Constant">-compile</span> =&gt; <span class="Constant">qw(</span><span class="Constant">:common &amp;OPT_EXECCGI</span><span class="Constant">)</span>;
+<span class="Statement">use </span>ModPerl::Const <span class="Constant">-compile</span> =&gt; <span class="Constant">'</span><span class="Constant">EXIT</span><span class="Constant">'</span>;
+
+<span class="Statement">unless</span> (<span class="Statement">defined</span> <span class="Identifier">$</span><span class="Type">ModPerl::Registry::</span><span class="Identifier">MarkLine</span>) {
+    <span class="Identifier">$</span><span class="Type">ModPerl::Registry::</span><span class="Identifier">MarkLine</span> = <span class="Constant">1</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># debug constants</span>
+<span class="Comment">#</span>
+<span class="Comment">#########################################################################</span>
+<span class="Statement">use constant</span> <span class="Constant">D_NONE</span>    =&gt; <span class="Constant">0</span>;
+<span class="Statement">use constant</span> <span class="Constant">D_ERROR</span>   =&gt; <span class="Constant">1</span>;
+<span class="Statement">use constant</span> <span class="Constant">D_WARN</span>    =&gt; <span class="Constant">2</span>;
+<span class="Statement">use constant</span> <span class="Constant">D_COMPILE</span> =&gt; <span class="Constant">4</span>;
+<span class="Statement">use constant</span> <span class="Constant">D_NOISE</span>   =&gt; <span class="Constant">8</span>;
+
+<span class="Comment"># the debug level can be overriden on the main server level of</span>
+<span class="Comment"># httpd.conf with:</span>
+<span class="Comment">#   PerlSetVar ModPerl::RegistryCooker::DEBUG 4</span>
+<span class="Statement">use constant</span> <span class="Constant">DEBUG</span> =&gt; <span class="Constant">0</span>;
+<span class="Comment">#</span><span class="Todo">XXX</span><span class="Comment">: below currently crashes the server on win32</span>
+<span class="Comment">#    defined Apache2-&gt;server-&gt;dir_config('ModPerl::RegistryCooker::DEBUG')</span>
+<span class="Comment">#        ? Apache2-&gt;server-&gt;dir_config('ModPerl::RegistryCooker::DEBUG')</span>
+<span class="Comment">#        : D_NONE;</span>
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># OS specific constants</span>
+<span class="Comment">#</span>
+<span class="Comment">#########################################################################</span>
+<span class="Statement">use constant</span> <span class="Constant">IS_WIN32</span> =&gt; <span class="Identifier">$^O</span> <span class="Statement">eq</span> <span class="Constant">&quot;</span><span class="Constant">MSWin32</span><span class="Constant">&quot;</span>;
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># constant subs</span>
+<span class="Comment">#</span>
+<span class="Comment">#########################################################################</span>
+<span class="Statement">use constant</span> <span class="Constant">NOP</span>   =&gt; <span class="Constant">''</span>;
+<span class="Statement">use constant</span> <span class="Constant">TRUE</span>  =&gt; <span class="Constant">1</span>;
+<span class="Statement">use constant</span> <span class="Constant">FALSE</span> =&gt; <span class="Constant">0</span>;
+
+
+<span class="Statement">use constant</span> <span class="Constant">NAMESPACE_ROOT</span> =&gt; <span class="Constant">'</span><span class="Constant">ModPerl::ROOT</span><span class="Constant">'</span>;
+
+
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">unless</span> (<span class="Statement">defined</span> <span class="Identifier">$</span><span class="Type">ModPerl::RegistryCooker::</span><span class="Identifier">NameWithVirtualHost</span>) {
+    <span class="Identifier">$</span><span class="Type">ModPerl::RegistryCooker::</span><span class="Identifier">NameWithVirtualHost</span> = <span class="Constant">1</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: new</span>
+<span class="Comment"># dflt: new</span>
+<span class="Comment"># args: $class - class to bless into</span>
+<span class="Comment">#       $r     - Apache2::RequestRec object</span>
+<span class="Comment"># desc: create the class's object and bless it</span>
+<span class="Comment"># rtrn: the newly created object</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">new </span>{
+    <span class="Statement">my</span> (<span class="Identifier">$class</span>, <span class="Identifier">$r</span>) = <span class="Identifier">@_</span>;
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">bless</span> {}, <span class="Identifier">$class</span>;
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;init</span>(<span class="Identifier">$r</span>);
+    <span class="Statement">return</span> <span class="Identifier">$self</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: init</span>
+<span class="Comment"># dflt: init</span>
+<span class="Comment"># desc: initializes the data object's fields: REQ FILENAME URI</span>
+<span class="Comment"># args: $r - Apache2::RequestRec object</span>
+<span class="Comment"># rtrn: nothing</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">init </span>{
+    <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span>      = <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span>;
+    <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span>      = <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span><span class="Identifier">-&gt;uri</span>;
+    <span class="Identifier">$_[</span><span class="Constant">0</span><span class="Identifier">]</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span> = <span class="Identifier">$_[</span><span class="Constant">1</span><span class="Identifier">]</span><span class="Identifier">-&gt;filename</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: handler</span>
+<span class="Comment"># dflt: handler</span>
+<span class="Comment"># desc: the handler() sub that is expected by Apache</span>
+<span class="Comment"># args: $class - handler's class</span>
+<span class="Comment">#       $r     - Apache2::RequestRec object</span>
+<span class="Comment">#       (o)can be called as handler($r) as well (without leading $class)</span>
+<span class="Comment"># rtrn: handler's response status</span>
+<span class="Comment"># note: must be implemented in a sub-class unless configured as</span>
+<span class="Comment">#       Apache2::Foo-&gt;handler in httpd.conf (because of the</span>
+<span class="Comment">#       __PACKAGE__, which is tied to the file)</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">handler </span><span class="PreProc">: </span><span class="PreProc">method </span>{
+    <span class="Statement">my</span> <span class="Identifier">$class</span> = (<span class="Identifier">@_</span> &gt;= <span class="Constant">2</span>) ? <span class="Statement">shift</span> : __PACKAGE__;
+    <span class="Statement">my</span> <span class="Identifier">$r</span> = <span class="Statement">shift</span>;
+    <span class="Statement">return</span> <span class="Identifier">$class</span><span class="Identifier">-&gt;new</span>(<span class="Identifier">$r</span>)-&gt;default_handler();
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: default_handler</span>
+<span class="Comment"># dflt: META: see above</span>
+<span class="Comment"># desc: META: see above</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: handler's response status</span>
+<span class="Comment"># note: that's what most sub-class handlers will call</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">default_handler </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;make_namespace</span>;
+
+    <span class="Statement">if</span> (<span class="Identifier">$self</span><span class="Identifier">-&gt;should_compile</span>) {
+        <span class="Statement">my</span> <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;can_compile</span>;
+        <span class="Statement">return</span> <span class="Identifier">$rc</span> <span class="Statement">unless</span> <span class="Identifier">$rc</span> == Apache2::Const::OK;
+        <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;convert_script_to_compiled_handler</span>;
+        <span class="Statement">return</span> <span class="Identifier">$rc</span> <span class="Statement">unless</span> <span class="Identifier">$rc</span> == Apache2::Const::OK;
+    }
+
+    <span class="Comment"># handlers shouldn't set $r-&gt;status but return it, so we reset the</span>
+    <span class="Comment"># status after running it</span>
+    <span class="Statement">my</span> <span class="Identifier">$old_status</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;status</span>;
+    <span class="Statement">my</span> <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;run</span>;
+    <span class="Statement">my</span> <span class="Identifier">$new_status</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;status</span>(<span class="Identifier">$old_status</span>);
+    <span class="Statement">return</span> (<span class="Identifier">$rc</span> == Apache2::Const::OK &amp;&amp; <span class="Identifier">$old_status</span> != <span class="Identifier">$new_status</span>)
+        ? <span class="Identifier">$new_status</span>
+        : <span class="Identifier">$rc</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: run</span>
+<span class="Comment"># dflt: run</span>
+<span class="Comment"># desc: executes the compiled code</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: execution status (Apache2::?)</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">run </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$r</span>       = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span>;
+    <span class="Statement">my</span> <span class="Identifier">$package</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;chdir_file</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$cv</span> = \<span class="Identifier">&amp;{</span><span class="Constant">&quot;</span><span class="Identifier">$package</span><span class="Special">\:</span><span class="Constant">:handler</span><span class="Constant">&quot;</span><span class="Identifier">}</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">%orig_inc</span>;
+    <span class="Statement">if</span> (<span class="Identifier">$self</span><span class="Identifier">-&gt;should_reset_inc_hash</span>) {
+        <span class="Identifier">%orig_inc</span> = <span class="Identifier">%INC</span>;
+    }
+
+    <span class="Statement">my</span> <span class="Identifier">$rc</span> = Apache2::Const::OK;
+    { <span class="Comment"># run the code and preserve warnings setup when it's done</span>
+        <span class="Statement">no warnings</span> <span class="Constant">FATAL</span> =&gt; <span class="Constant">'</span><span class="Constant">all</span><span class="Constant">'</span>;
+        <span class="Comment">#local $^W = 0;</span>
+        <span class="Statement">eval</span> { <span class="Identifier">$cv</span>-&gt;(<span class="Identifier">$r</span>, <span class="Identifier">@_</span>) };
+
+        <span class="Comment"># log script's execution errors</span>
+        <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;error_check</span>;
+
+        {
+            <span class="Comment"># there might be no END blocks to call, so $@ will be not</span>
+            <span class="Comment"># reset</span>
+            <span class="Statement">local</span> <span class="Identifier">$@</span>;
+            ModPerl::Global::special_list_call(<span class="Constant">END</span> =&gt; <span class="Identifier">$package</span>);
+
+            <span class="Comment"># log script's END blocks execution errors</span>
+            <span class="Statement">my</span> <span class="Identifier">$new_rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;error_check</span>;
+
+            <span class="Comment"># use the END blocks return status if the script's execution</span>
+            <span class="Comment"># was successful</span>
+            <span class="Identifier">$rc</span> = <span class="Identifier">$new_rc</span> <span class="Statement">if</span> <span class="Identifier">$rc</span> == Apache2::Const::OK;
+        }
+
+    }
+
+    <span class="Statement">if</span> (<span class="Identifier">$self</span><span class="Identifier">-&gt;should_reset_inc_hash</span>) {
+        <span class="Comment"># to avoid the bite of require'ing a file with no package delaration</span>
+        <span class="Comment"># Apache2::PerlRun in mod_perl 1.15_01 started to localize %INC</span>
+        <span class="Comment"># later on it has been adjusted to preserve loaded .pm files,</span>
+        <span class="Comment"># which presumably contained the package declaration</span>
+        <span class="Statement">for</span> (<span class="Statement">keys</span> <span class="Identifier">%INC</span>) {
+            <span class="Statement">next</span> <span class="Statement">if</span> <span class="Identifier">$orig_inc{$_}</span>;
+            <span class="Statement">next</span> <span class="Statement">if</span> <span class="Statement">/</span><span class="Special">\.</span><span class="Constant">pm$</span><span class="Statement">/</span>;
+            <span class="Statement">delete</span> <span class="Identifier">$INC{$_}</span>;
+        }
+    }
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;flush_namespace</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;chdir_file</span>(Apache2::ServerUtil::server_root());
+
+    <span class="Statement">return</span> <span class="Identifier">$rc</span>;
+}
+
+
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: can_compile</span>
+<span class="Comment"># dflt: can_compile</span>
+<span class="Comment"># desc: checks whether the script is allowed and can be compiled</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: $rc - return status to forward</span>
+<span class="Comment"># efct: initializes the data object's fields: MTIME</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">can_compile </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+    <span class="Statement">my</span> <span class="Identifier">$r</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span>;
+
+    <span class="Statement">return</span> Apache2::Const::DECLINED <span class="Statement">if</span> <span class="Statement">-d</span> <span class="Identifier">$r</span><span class="Identifier">-&gt;my_finfo</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">MTIME</span><span class="Identifier">}</span> = <span class="Statement">-M</span> _;
+
+    <span class="Statement">if</span> (!(<span class="Identifier">$r</span><span class="Identifier">-&gt;allow_options</span> &amp; Apache2::Const::OPT_EXECCGI)) {
+        <span class="Identifier">$r</span><span class="Identifier">-&gt;log_error</span>(<span class="Constant">&quot;</span><span class="Constant">Options ExecCGI is off in this directory</span><span class="Constant">&quot;</span>,
+                       <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span>);
+        <span class="Statement">return</span> Apache2::Const::FORBIDDEN;
+    }
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span>(<span class="Constant">&quot;</span><span class="Constant">can compile </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span><span class="Constant">&quot;</span>) <span class="Statement">if</span> DEBUG &amp; D_NOISE;
+
+    <span class="Statement">return</span> Apache2::Const::OK;
+
+}
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: namespace_root</span>
+<span class="Comment"># dflt: namespace_root</span>
+<span class="Comment"># desc: define the namespace root for storing compiled scripts</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: the namespace root</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">namespace_root </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+    <span class="Statement">join</span> <span class="Constant">'</span><span class="Constant">::</span><span class="Constant">'</span>, NAMESPACE_ROOT, <span class="Statement">ref</span>(<span class="Identifier">$self</span>);
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: make_namespace</span>
+<span class="Comment"># dflt: make_namespace</span>
+<span class="Comment"># desc: prepares the namespace</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: the namespace</span>
+<span class="Comment"># efct: initializes the field: PACKAGE</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">make_namespace </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$package</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;namespace_from</span>;
+
+    <span class="Comment"># Escape everything into valid perl identifiers</span>
+    <span class="Identifier">$package</span> =~ <span class="Statement">s/</span><span class="Special">([^A-Za-z0-9_])</span><span class="Statement">/</span><span class="Constant">sprintf(&quot;_%2x&quot;, unpack(&quot;C&quot;, </span><span class="Identifier">$1</span><span class="Constant">))</span><span class="Statement">/eg</span>;
+
+    <span class="Comment"># make sure that the sub-package doesn't start with a digit</span>
+    <span class="Identifier">$package</span> =~ <span class="Statement">s/</span><span class="Constant">^</span><span class="Special">(</span><span class="Special">\d</span><span class="Special">)</span><span class="Statement">/</span><span class="Constant">_</span><span class="Identifier">$1</span><span class="Statement">/</span>;
+
+    <span class="Comment"># prepend root</span>
+    <span class="Identifier">$package</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;namespace_root</span>() . <span class="Constant">&quot;</span><span class="Constant">::</span><span class="Identifier">$package</span><span class="Constant">&quot;</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span> = <span class="Identifier">$package</span>;
+
+    <span class="Statement">return</span> <span class="Identifier">$package</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: namespace_from</span>
+<span class="Comment"># dflt: namespace_from_filename</span>
+<span class="Comment"># desc: returns a partial raw package name based on filename, uri, else</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: a unique string</span>
+<span class="Comment">#########################################################################</span>
+
+*namespace_from = \<span class="Identifier">&amp;namespace_from_filename</span>;
+
+<span class="Comment"># return a package name based on $r-&gt;filename only</span>
+<span class="Statement">sub </span><span class="Identifier">namespace_from_filename </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> (<span class="Identifier">$volume</span>, <span class="Identifier">$dirs</span>, <span class="Identifier">$file</span>) =
+        File::Spec::Functions::splitpath(<span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span>);
+    <span class="Statement">my</span> <span class="Identifier">@dirs</span> = File::Spec::Functions::splitdir(<span class="Identifier">$dirs</span>);
+    <span class="Statement">return</span> <span class="Statement">join</span> <span class="Constant">'</span><span class="Constant">_</span><span class="Constant">'</span>, <span class="Statement">grep {</span> <span class="Statement">defined</span> &amp;&amp; <span class="Statement">length</span> <span class="Statement">}</span> <span class="Identifier">$volume</span>, <span class="Identifier">@dirs</span>, <span class="Identifier">$file</span>;
+}
+
+<span class="Comment"># return a package name based on $r-&gt;uri only</span>
+<span class="Statement">sub </span><span class="Identifier">namespace_from_uri </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$path_info</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;path_info</span>;
+    <span class="Statement">my</span> <span class="Identifier">$script_name</span> = <span class="Identifier">$path_info</span> &amp;&amp; <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span> =~ <span class="Statement">/</span><span class="Special">\Q</span><span class="Identifier">$path_info</span><span class="Special">\E</span><span class="Constant">$</span><span class="Statement">/</span>
+        ? <span class="Statement">substr</span>(<span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span>, <span class="Constant">0</span>, <span class="Statement">length</span>(<span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span>) - <span class="Statement">length</span>(<span class="Identifier">$path_info</span>))
+        : <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span>;
+
+    <span class="Statement">if</span> (<span class="Identifier">$</span><span class="Type">ModPerl::RegistryCooker::</span><span class="Identifier">NameWithVirtualHost</span> &amp;&amp;
+        <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;server-&gt;is_virtual</span>) {
+        <span class="Statement">my</span> <span class="Identifier">$name</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;get_server_name</span>;
+        <span class="Identifier">$script_name</span> = <span class="Statement">join</span> <span class="Constant">&quot;&quot;</span>, <span class="Identifier">$name</span>, <span class="Identifier">$script_name</span> <span class="Statement">if</span> <span class="Identifier">$name</span>;
+    }
+
+    <span class="Identifier">$script_name</span> =~ <span class="Statement">s:</span><span class="Constant">/</span><span class="Special">+</span><span class="Identifier">$</span><span class="Statement">:</span><span class="Constant">/__INDEX__</span><span class="Statement">:</span>;
+
+    <span class="Statement">return</span> <span class="Identifier">$script_name</span>;
+}
+
+<span class="Comment">#########################################################################</span>
+<span class="Comment"># func: convert_script_to_compiled_handler</span>
+<span class="Comment"># dflt: convert_script_to_compiled_handler</span>
+<span class="Comment"># desc: reads the script, converts into a handler and compiles it</span>
+<span class="Comment"># args: $self - registry blessed object</span>
+<span class="Comment"># rtrn: success/failure status</span>
+<span class="Comment">#########################################################################</span>
+
+<span class="Statement">sub </span><span class="Identifier">convert_script_to_compiled_handler </span>{
+    <span class="Statement">my</span> <span class="Identifier">$self</span> = <span class="Statement">shift</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$rc</span> = Apache2::Const::OK;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span>(<span class="Constant">&quot;</span><span class="Constant">Adding package </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span><span class="Constant">&quot;</span>) <span class="Statement">if</span> DEBUG &amp; D_NOISE;
+
+    <span class="Comment"># get the script's source</span>
+    <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;read_script</span>;
+    <span class="Statement">return</span> <span class="Identifier">$rc</span> <span class="Statement">unless</span> <span class="Identifier">$rc</span> == Apache2::Const::OK;
+
+    <span class="Comment"># convert the shebang line opts into perl code</span>
+    <span class="Statement">my</span> <span class="Identifier">$shebang</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;shebang_to_perl</span>;
+
+    <span class="Comment"># mod_cgi compat, should compile the code while in its dir, so</span>
+    <span class="Comment"># relative require/open will work.</span>
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;chdir_file</span>;
+
+<span class="Comment">#    undef &amp;{&quot;$self-&gt;{PACKAGE}\::handler&quot;}; unless DEBUG &amp; D_NOISE; #avoid warnings</span>
+<span class="Comment">#    $self-&gt;{PACKAGE}-&gt;can('undef_functions') &amp;&amp; $self-&gt;{PACKAGE}-&gt;undef_functions;</span>
+
+    <span class="Statement">my</span> <span class="Identifier">$line</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;get_mark_line</span>;
+
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;strip_end_data_segment</span>;
+
+    <span class="Comment"># handle the non-parsed handlers ala mod_cgi (though mod_cgi does</span>
+    <span class="Comment"># some tricks removing the header_out and other filters, here we</span>
+    <span class="Comment"># just call assbackwards which has the same effect).</span>
+    <span class="Statement">my</span> <span class="Identifier">$base</span> = File::Basename::basename(<span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span>);
+    <span class="Statement">my</span> <span class="Identifier">$nph</span> = <span class="Statement">substr</span>(<span class="Identifier">$base</span>, <span class="Constant">0</span>, <span class="Constant">4</span>) <span class="Statement">eq</span> <span class="Constant">'</span><span class="Constant">nph-</span><span class="Constant">'</span> ? <span class="Constant">'</span><span class="Constant">$_[0]-&gt;assbackwards(1);</span><span class="Constant">'</span> : <span class="Constant">&quot;&quot;</span>;
+    <span class="Statement">my</span> <span class="Identifier">$script_name</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;get_script_name</span> || <span class="Identifier">$0</span>;
+
+    <span class="Statement">my</span> <span class="Identifier">$eval</span> = <span class="Statement">join</span> <span class="Constant">''</span>,
+                    <span class="Constant">'</span><span class="Constant">package </span><span class="Constant">'</span>,
+                    <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span>, <span class="Constant">&quot;</span><span class="Constant">;</span><span class="Constant">&quot;</span>,
+                    <span class="Constant">&quot;</span><span class="Constant">sub handler {</span><span class="Constant">&quot;</span>,
+                    <span class="Constant">&quot;</span><span class="Constant">local </span><span class="Special">\$</span><span class="Constant">0 = '</span><span class="Identifier">$script_name</span><span class="Constant">';</span><span class="Constant">&quot;</span>,
+                    <span class="Identifier">$nph</span>,
+                    <span class="Identifier">$shebang</span>,
+                    <span class="Identifier">$line</span>,
+                    <span class="Identifier">${</span> <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">CODE</span><span class="Identifier">}</span> <span class="Identifier">}</span>,
+                    <span class="Constant">&quot;</span><span class="Special">\n</span><span class="Constant">}</span><span class="Constant">&quot;</span>; <span class="Comment"># last line comment without newline?</span>
+
+    <span class="Identifier">$rc</span> = <span class="Identifier">$self</span><span class="Identifier">-&gt;compile</span>(\<span class="Identifier">$eval</span>);
+    <span class="Statement">return</span> <span class="Identifier">$rc</span> <span class="Statement">unless</span> <span class="Identifier">$rc</span> == Apache2::Const::OK;
+    <span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span>(<span class="Constant">qq{</span><span class="Constant">compiled package </span><span class="Special">\&quot;</span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Constant">}</span>\<span class="Constant">&quot;</span><span class="Constant">}) if DEBUG &amp; D_NOISE;</span>
+
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;chdir_file</span><span class="Constant">(Apache2::ServerUtil::server_root());</span>
+
+<span class="Constant">#    if(my </span><span class="Identifier">$opt</span><span class="Constant"> = </span><span class="Identifier">$r</span><span class="Identifier">-&gt;dir_config</span><span class="Constant">(</span><span class="Constant">&quot;</span>PerlRunOnce<span class="Constant">&quot;</span><span class="Constant">)) {</span>
+<span class="Constant">#        </span><span class="Identifier">$r</span><span class="Identifier">-&gt;child_terminate</span><span class="Constant"> if lc(</span><span class="Identifier">$opt</span><span class="Constant">) eq </span><span class="Constant">&quot;</span>on<span class="Constant">&quot;</span><span class="Constant">;</span>
+<span class="Constant">#    }</span>
+
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;cache_it</span><span class="Constant">;</span>
+
+<span class="Constant">    return </span><span class="Identifier">$rc</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: cache_table</span>
+<span class="Constant"># dflt: cache_table_common</span>
+<span class="Constant"># desc: return a symbol table for caching compiled scripts in</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object (or the class name)</span>
+<span class="Constant"># rtrn: symbol table</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">*cache_table = </span><span class="Special">\&amp;</span><span class="Constant">cache_table_common;</span>
+
+<span class="Constant">sub cache_table_common {</span>
+<span class="Constant">    </span><span class="Special">\%</span><span class="Constant">ModPerl::RegistryCache;</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">sub cache_table_local {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    my </span><span class="Identifier">$class</span><span class="Constant"> = ref(</span><span class="Identifier">$self</span><span class="Constant">) || </span><span class="Identifier">$self</span><span class="Constant">;</span>
+<span class="Constant">    no strict 'refs';</span>
+<span class="Constant">    </span><span class="Special">\%</span><span class="Identifier">$class</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: cache_it</span>
+<span class="Constant"># dflt: cache_it</span>
+<span class="Constant"># desc: mark the package as cached by storing its modification time</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: nothing</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub cache_it {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;cache_table</span><span class="Identifier">-&gt;{</span> <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span> <span class="Identifier">}</span><span class="Identifier">{</span><span class="Constant">mtime</span><span class="Identifier">}</span><span class="Constant"> = </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">MTIME</span><span class="Identifier">}</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: is_cached</span>
+<span class="Constant"># dflt: is_cached</span>
+<span class="Constant"># desc: checks whether the package is already cached</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: TRUE if cached,</span>
+<span class="Constant">#       FALSE otherwise</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub is_cached {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    exists </span><span class="Identifier">$self</span><span class="Identifier">-&gt;cache_table</span><span class="Identifier">-&gt;{</span> <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span> <span class="Identifier">}</span><span class="Identifier">{</span><span class="Constant">mtime</span><span class="Identifier">}</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: should_compile</span>
+<span class="Constant"># dflt: should_compile_once</span>
+<span class="Constant"># desc: decide whether code should be compiled or not</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: TRUE if should compile</span>
+<span class="Constant">#       FALSE otherwise</span>
+<span class="Constant"># efct: sets MTIME if it's not set yet</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">*should_compile = </span><span class="Special">\&amp;</span><span class="Constant">should_compile_once;</span>
+
+<span class="Constant"># return false only if the package is cached and its source file</span>
+<span class="Constant"># wasn't modified</span>
+<span class="Constant">sub should_compile_if_modified {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">MTIME</span><span class="Identifier">}</span><span class="Constant"> ||= -M </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;my_finfo</span><span class="Constant">;</span>
+<span class="Constant">    !(</span><span class="Identifier">$self</span><span class="Identifier">-&gt;is_cached</span><span class="Constant"> &amp;&amp;</span>
+<span class="Constant">      </span><span class="Identifier">$self</span><span class="Identifier">-&gt;cache_table</span><span class="Identifier">-&gt;{</span> <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span> <span class="Identifier">}</span><span class="Identifier">{</span><span class="Constant">mtime</span><span class="Identifier">}</span><span class="Constant"> &lt;= </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">MTIME</span><span class="Identifier">}</span><span class="Constant">);</span>
+<span class="Constant">}</span>
+
+<span class="Constant"># return false if the package is cached already</span>
+<span class="Constant">sub should_compile_once {</span>
+<span class="Constant">    not shift-&gt;is_cached;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: should_reset_inc_hash</span>
+<span class="Constant"># dflt: FALSE</span>
+<span class="Constant"># desc: decide whether to localize %INC for required .pl files from the script</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: TRUE if should reset</span>
+<span class="Constant">#       FALSE otherwise</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">*should_reset_inc_hash = </span><span class="Special">\&amp;</span><span class="Constant">FALSE;</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: flush_namespace</span>
+<span class="Constant"># dflt: NOP (don't flush)</span>
+<span class="Constant"># desc: flush the compiled package's namespace</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: nothing</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">*flush_namespace = </span><span class="Special">\&amp;</span><span class="Constant">NOP;</span>
+
+<span class="Constant">sub flush_namespace_normal {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span><span class="Constant">(</span><span class="Constant">&quot;</span>flushing namespace<span class="Constant">&quot;</span><span class="Constant">) if DEBUG &amp; D_NOISE;</span>
+<span class="Constant">    ModPerl::Util::unload_package(</span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">PACKAGE</span><span class="Identifier">}</span><span class="Constant">);</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: read_script</span>
+<span class="Constant"># dflt: read_script</span>
+<span class="Constant"># desc: reads the script in</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: Apache2::Const::OK on success, some other code on failure</span>
+<span class="Constant"># efct: initializes the CODE field with the source script</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant"># reads the contents of the file</span>
+<span class="Constant">sub read_script {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span><span class="Constant">(</span><span class="Constant">&quot;</span>reading <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span><span class="Constant">&quot;</span><span class="Constant">) if DEBUG &amp; D_NOISE;</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">CODE</span><span class="Identifier">}</span><span class="Constant"> = eval { </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;slurp_filename</span><span class="Constant">(0) }; # untainted</span>
+<span class="Constant">    if (</span><span class="Identifier">$@</span><span class="Constant">) {</span>
+<span class="Constant">        </span><span class="Identifier">$self</span><span class="Identifier">-&gt;log_error</span><span class="Constant">(</span><span class="Constant">&quot;</span><span class="Identifier">$@</span><span class="Constant">&quot;</span><span class="Constant">);</span>
+
+<span class="Constant">        if (ref </span><span class="Identifier">$@</span><span class="Constant"> eq 'APR::Error') {</span>
+<span class="Constant">            return Apache2::Const::FORBIDDEN if APR::Status::is_EACCES(</span><span class="Identifier">$@</span><span class="Constant">);</span>
+<span class="Constant">            return Apache2::Const::NOT_FOUND if APR::Status::is_ENOENT(</span><span class="Identifier">$@</span><span class="Constant">);</span>
+<span class="Constant">        }</span>
+
+<span class="Constant">        return Apache2::Const::SERVER_ERROR;</span>
+<span class="Constant">    }</span>
+
+<span class="Constant">    return Apache2::Const::OK;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: shebang_to_perl</span>
+<span class="Constant"># dflt: shebang_to_perl</span>
+<span class="Constant"># desc: parse the shebang line and convert command line switches</span>
+<span class="Constant">#       (defined in %switches) into a perl code.</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: a Perl snippet to be put at the beginning of the CODE field</span>
+<span class="Constant">#       by caller</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">my %switches = (</span>
+<span class="Constant">   'T' =&gt; sub {</span>
+<span class="Constant">       Apache2::ServerRec::warn(</span><span class="Constant">&quot;</span><span class="Statement">-T</span> switch is ignored, enable <span class="Constant">&quot;</span><span class="Constant"> .</span>
+<span class="Constant">                                </span><span class="Constant">&quot;</span>with <span class="Constant">'</span><span class="Constant">PerlSwitches -T</span><span class="Constant">'</span> in httpd.conf\n<span class="Constant">&quot;</span><span class="Constant">)</span>
+<span class="Constant">             unless </span><span class="Identifier">${</span>^TAINT<span class="Identifier">}</span><span class="Constant">;</span>
+<span class="Constant">       </span><span class="Constant">&quot;&quot;</span><span class="Constant">;</span>
+<span class="Constant">   },</span>
+<span class="Constant">   'w' =&gt; sub { </span><span class="Constant">&quot;</span><span class="Statement">use warnings</span>;\n<span class="Constant">&quot;</span><span class="Constant"> },</span>
+<span class="Constant">);</span>
+
+<span class="Constant">sub shebang_to_perl {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    my (</span><span class="Identifier">$line</span><span class="Constant">) = </span><span class="Identifier">${</span> <span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">CODE</span><span class="Identifier">}</span> <span class="Identifier">}</span><span class="Constant"> =~ /^(.*)</span><span class="Identifier">$/</span><span class="Constant">m;</span>
+<span class="Constant">    my </span><span class="Identifier">@cmdline</span><span class="Constant"> = split /</span><span class="Special">\s</span><span class="Constant">+/, </span><span class="Identifier">$line</span><span class="Constant">;</span>
+<span class="Constant">    return </span><span class="Constant">&quot;&quot;</span><span class="Constant"> unless </span><span class="Identifier">@cmdline</span><span class="Constant">;</span>
+<span class="Constant">    return </span><span class="Constant">&quot;&quot;</span><span class="Constant"> unless shift(</span><span class="Identifier">@cmdline</span><span class="Constant">) =~ /^</span><span class="Special">\#</span><span class="Constant">!/;</span>
+
+<span class="Constant">    my </span><span class="Identifier">$prepend</span><span class="Constant"> = </span><span class="Constant">&quot;&quot;</span><span class="Constant">;</span>
+<span class="Constant">    for my </span><span class="Identifier">$s</span><span class="Constant"> (</span><span class="Identifier">@cmdline</span><span class="Constant">) {</span>
+<span class="Constant">        next unless </span><span class="Identifier">$s</span><span class="Constant"> =~ s/^-//;</span>
+<span class="Constant">        last if substr(</span><span class="Identifier">$s</span><span class="Constant">,0,1) eq </span><span class="Constant">&quot;</span>-<span class="Constant">&quot;</span><span class="Constant">;</span>
+<span class="Constant">        for (split //, </span><span class="Identifier">$s</span><span class="Constant">) {</span>
+<span class="Constant">            next unless exists </span><span class="Identifier">$switches{$_}</span><span class="Constant">;</span>
+<span class="Constant">            </span><span class="Identifier">$prepend</span><span class="Constant"> .= </span><span class="Identifier">$switches{$_}</span><span class="Constant">-&gt;();</span>
+<span class="Constant">        }</span>
+<span class="Constant">    }</span>
+
+<span class="Constant">    return </span><span class="Identifier">$prepend</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: get_script_name</span>
+<span class="Constant"># dflt: get_script_name</span>
+<span class="Constant"># desc: get the script's name to set into </span><span class="Identifier">$0</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant"># rtrn: path to the script's filename</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub get_script_name {</span>
+<span class="Constant">    shift-&gt;{FILENAME};</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: chdir_file</span>
+<span class="Constant"># dflt: NOP</span>
+<span class="Constant"># desc: chdirs into </span><span class="Identifier">$dir</span>
+<span class="Constant"># args: </span><span class="Identifier">$self</span><span class="Constant"> - registry blessed object</span>
+<span class="Constant">#       </span><span class="Identifier">$dir</span><span class="Constant"> - a dir</span>
+<span class="Constant"># rtrn: nothing (?or success/failure?)</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">*chdir_file = </span><span class="Special">\&amp;</span><span class="Constant">NOP;</span>
+
+<span class="Constant">sub chdir_file_normal {</span>
+<span class="Constant">    my (</span><span class="Identifier">$self</span><span class="Constant">, </span><span class="Identifier">$dir</span><span class="Constant">) = </span><span class="Identifier">@_</span><span class="Constant">;</span>
+<span class="Constant">    </span><span class="Identifier">$dir</span><span class="Constant"> ||= File::Basename::dirname(</span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">FILENAME</span><span class="Identifier">}</span><span class="Constant">);</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;debug</span><span class="Constant">(</span><span class="Constant">&quot;</span><span class="Statement">chdir</span> <span class="Identifier">$dir</span><span class="Constant">&quot;</span><span class="Constant">) if DEBUG &amp; D_NOISE;</span>
+<span class="Constant">    chdir </span><span class="Identifier">$dir</span><span class="Constant"> or die </span><span class="Constant">&quot;</span>Can<span class="Constant">'</span><span class="Constant">t chdir to $dir: $!&quot;;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: get_mark_line</span>
+<span class="Constant"># dflt: get_mark_line</span>
+<span class="Constant"># desc: generates the perl compiler #line directive</span>
+<span class="Constant"># args: $self - registry blessed object</span>
+<span class="Constant"># rtrn: returns the perl compiler #line directive</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub get_mark_line {</span>
+<span class="Constant">    my $self = shift;</span>
+<span class="Constant">    $ModPerl::Registry::MarkLine ? &quot;\n#line 1 $self-&gt;{FILENAME}\n&quot; : &quot;&quot;;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: strip_end_data_segment</span>
+<span class="Constant"># dflt: strip_end_data_segment</span>
+<span class="Constant"># desc: remove the trailing non-code from $self-&gt;{CODE}</span>
+<span class="Constant"># args: $self - registry blessed object</span>
+<span class="Constant"># rtrn: nothing</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub strip_end_data_segment {</span>
+<span class="Constant">    ${ +shift-&gt;{CODE} } =~ s/^__(END|DATA)__(.*)//ms;</span>
+<span class="Constant">}</span>
+
+
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: compile</span>
+<span class="Constant"># dflt: compile</span>
+<span class="Constant"># desc: compile the code in $eval</span>
+<span class="Constant"># args: $self - registry blessed object</span>
+<span class="Constant">#       $eval - a ref to a scalar with the code to compile</span>
+<span class="Constant"># rtrn: success/failure</span>
+<span class="Constant"># note: $r must not be in scope of compile(), scripts must do</span>
+<span class="Constant">#       my $r = shift; to get it off the args stack</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub compile {</span>
+<span class="Constant">    my ($self, $eval) = @_;</span>
+
+<span class="Constant">    $self-&gt;debug(&quot;compiling $self-&gt;{FILENAME}&quot;) if DEBUG &amp;&amp; D_COMPILE;</span>
+
+<span class="Constant">    ModPerl::Global::special_list_register(END =&gt; $self-&gt;{PACKAGE});</span>
+<span class="Constant">    ModPerl::Global::special_list_clear(   END =&gt; $self-&gt;{PACKAGE});</span>
+
+<span class="Constant">    {</span>
+<span class="Constant">        # let the code define its own warn and strict level</span>
+<span class="Constant">        no strict;</span>
+<span class="Constant">        no warnings FATAL =&gt; </span><span class="Constant">'</span>all<span class="Constant">'</span><span class="Constant">; # because we use FATAL</span>
+<span class="Constant">        eval $$eval;</span>
+<span class="Constant">    }</span>
+
+<span class="Constant">    return $self-&gt;error_check;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: error_check</span>
+<span class="Constant"># dflt: error_check</span>
+<span class="Constant"># desc: checks $@ for errors</span>
+<span class="Constant"># args: $self - registry blessed object</span>
+<span class="Constant"># rtrn: Apache2::Const::SERVER_ERROR if $@ is set, Apache2::Const::OK otherwise</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub error_check {</span>
+<span class="Constant">    my $self = shift;</span>
+
+<span class="Constant">    # ModPerl::Util::exit() throws an exception object whose rc is</span>
+<span class="Constant">    # ModPerl::EXIT</span>
+<span class="Constant">    # (see modperl_perl_exit() and modperl_errsv() C functions)</span>
+<span class="Constant">    if ($@ &amp;&amp; !(ref $@ eq </span><span class="Constant">'</span>APR::Error<span class="Constant">'</span><span class="Constant"> &amp;&amp; $@ == ModPerl::EXIT)) {</span>
+<span class="Constant">        $self-&gt;log_error($@);</span>
+<span class="Constant">        return Apache2::Const::SERVER_ERROR;</span>
+<span class="Constant">    }</span>
+<span class="Constant">    return Apache2::Const::OK;</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: install_aliases</span>
+<span class="Constant"># dflt: install_aliases</span>
+<span class="Constant"># desc: install the method aliases into $class</span>
+<span class="Constant"># args: $class - the class to install the methods into</span>
+<span class="Constant">#       $rh_aliases - a ref to a hash with aliases mapping</span>
+<span class="Constant"># rtrn: nothing</span>
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant">sub install_aliases {</span>
+<span class="Constant">    my ($class, $rh_aliases) = @_;</span>
+
+<span class="Constant">    no strict </span><span class="Constant">'</span>refs<span class="Constant">'</span><span class="Constant">;</span>
+<span class="Constant">    while (my ($k,$v) = each %$rh_aliases) {</span>
+<span class="Constant">        if (my $sub = *{$v}{CODE}){</span>
+<span class="Constant">            *{ $class . &quot;::$k&quot; } = $sub;</span>
+<span class="Constant">        }</span>
+<span class="Constant">        else {</span>
+<span class="Constant">            die &quot;$class: $k aliasing failed; sub $v doesn</span><span class="Constant">'</span>t exist<span class="Constant">&quot;</span><span class="Constant">;</span>
+<span class="Constant">        }</span>
+<span class="Constant">    }</span>
+<span class="Constant">}</span>
+
+<span class="Constant">### helper methods</span>
+
+<span class="Constant">sub debug {</span>
+<span class="Constant">    my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">    my </span><span class="Identifier">$class</span><span class="Constant"> = ref </span><span class="Identifier">$self</span><span class="Constant">;</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;log_error</span><span class="Constant">(</span><span class="Constant">&quot;</span><span class="Identifier">$$</span>: <span class="Identifier">$class</span>: <span class="Constant">&quot;</span><span class="Constant"> . join '', </span><span class="Identifier">@_</span><span class="Constant">);</span>
+<span class="Constant">}</span>
+
+<span class="Constant">sub log_error {</span>
+<span class="Constant">    my (</span><span class="Identifier">$self</span><span class="Constant">, </span><span class="Identifier">$msg</span><span class="Constant">) = </span><span class="Identifier">@_</span><span class="Constant">;</span>
+<span class="Constant">    my </span><span class="Identifier">$class</span><span class="Constant"> = ref </span><span class="Identifier">$self</span><span class="Constant">;</span>
+
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;log_error</span><span class="Constant">(</span><span class="Identifier">$msg</span><span class="Constant">);</span>
+<span class="Constant">    </span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">REQ</span><span class="Identifier">}</span><span class="Identifier">-&gt;notes-&gt;set</span><span class="Constant">('error-notes' =&gt; </span><span class="Identifier">$msg</span><span class="Constant">);</span>
+<span class="Constant">    </span><span class="Identifier">$@</span><span class="Constant">{</span><span class="Identifier">$self</span><span class="Identifier">-&gt;{</span><span class="Constant">URI</span><span class="Identifier">}</span><span class="Constant">} = </span><span class="Identifier">$msg</span><span class="Constant">;</span>
+<span class="Constant">}</span>
+
+<span class="Constant">#########################################################################</span>
+<span class="Constant"># func: uncache_myself</span>
+<span class="Constant"># dflt: uncache_myself</span>
+<span class="Constant"># desc: unmark the package as cached by forgetting its modification time</span>
+<span class="Constant"># args: none</span>
+<span class="Constant"># rtrn: nothing</span>
+<span class="Constant"># note: this is a function and not a method, it should be called from</span>
+<span class="Constant">#       the registry script, and using the caller() method we figure</span>
+<span class="Constant">#       out the package the script was compiled into</span>
+
+<span class="Constant">#########################################################################</span>
+
+<span class="Constant"># this is a function should be called from the registry script, and</span>
+<span class="Constant"># using the caller() method we figure out the package the script was</span>
+<span class="Constant"># compiled into and trying to uncache it.</span>
+<span class="Constant">#</span>
+<span class="Constant"># it's currently used only for testing purposes and not a part of the</span>
+<span class="Constant"># public interface. it expects to find the compiled package in the</span>
+<span class="Constant"># symbol table cache returned by cache_table_common(), if you override</span>
+<span class="Constant"># cache_table() to point to another function, this function will fail.</span>
+<span class="Constant">sub uncache_myself {</span>
+<span class="Constant">    my </span><span class="Identifier">$package</span><span class="Constant"> = scalar caller;</span>
+<span class="Constant">    my (</span><span class="Identifier">$class</span><span class="Constant">) = __PACKAGE__-&gt;cache_table_common();</span>
+
+<span class="Constant">    unless (defined </span><span class="Identifier">$class</span><span class="Constant">) {</span>
+<span class="Constant">        Apache2-&gt;warn(</span><span class="Constant">&quot;</span><span class="Identifier">$$</span>: cannot figure out cache symbol table <span class="Statement">for</span> <span class="Identifier">$package</span><span class="Constant">&quot;</span><span class="Constant">);</span>
+<span class="Constant">        return;</span>
+<span class="Constant">    }</span>
+
+<span class="Constant">    if (exists </span><span class="Identifier">$class-&gt;{$package}</span><span class="Constant"> &amp;&amp; exists </span><span class="Identifier">$class-&gt;{$package}</span><span class="Identifier">{</span><span class="Constant">mtime</span><span class="Identifier">}</span><span class="Constant">) {</span>
+<span class="Constant">        Apache2-&gt;warn(</span><span class="Constant">&quot;</span><span class="Identifier">$$</span>: uncaching <span class="Identifier">$package</span>\n<span class="Constant">&quot;</span><span class="Constant">) if DEBUG &amp; D_COMPILE;</span>
+<span class="Constant">        delete </span><span class="Identifier">$class-&gt;{$package}</span><span class="Identifier">{</span><span class="Constant">mtime</span><span class="Identifier">}</span><span class="Constant">;</span>
+<span class="Constant">    }</span>
+<span class="Constant">    else {</span>
+<span class="Constant">        Apache2-&gt;warn(</span><span class="Constant">&quot;</span><span class="Identifier">$$</span>: cannot find <span class="Identifier">$package</span> in cache<span class="Constant">&quot;</span><span class="Constant">);</span>
+<span class="Constant">    }</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant"># XXX: should go away when finfo() is ported to 2.0 (don't want to</span>
+<span class="Constant"># depend on compat.pm)</span>
+<span class="Constant">sub Apache2::RequestRec::my_finfo {</span>
+<span class="Constant">    my </span><span class="Identifier">$r</span><span class="Constant"> = shift;</span>
+<span class="Constant">    stat </span><span class="Identifier">$r</span><span class="Identifier">-&gt;filename</span><span class="Constant">;</span>
+<span class="Constant">    </span><span class="Special">\*</span><span class="Constant">_;</span>
+<span class="Constant">}</span>
+
+
+<span class="Constant">1;</span>
+<span class="Constant">__END__</span>
+
+<span class="Constant">=head1 NAME</span>
+
+<span class="Constant">ModPerl::RegistryCooker - Cook mod_perl 2.0 Registry Modules</span>
+
+<span class="Constant">=head1 Synopsis</span>
+
+<span class="Constant">  # shouldn't be used as-is but sub-classed first</span>
+<span class="Constant">  # see ModPerl::Registry for an example</span>
+
+<span class="Constant">=head1 Description</span>
+
+<span class="Constant">C&lt;ModPerl::RegistryCooker&gt; is used to create flexible and overridable</span>
+<span class="Constant">registry modules which emulate mod_cgi for Perl scripts. The concepts</span>
+<span class="Constant">are discussed in the manpage of the following modules:</span>
+<span class="Constant">C&lt;L&lt;ModPerl::Registry&gt;&gt;, C&lt;L&lt;ModPerl::Registry&gt;&gt; and</span>
+<span class="Constant">C&lt;L&lt;ModPerl::RegistryBB&gt;&gt;.</span>
+
+<span class="Constant">C&lt;ModPerl::RegistryCooker&gt; has two purposes:</span>
+
+<span class="Constant">=over</span>
+
+<span class="Constant">=item *</span>
+
+<span class="Constant">Provide ingredients that can be used by registry sub-classes</span>
+
+<span class="Constant">=item *</span>
+
+<span class="Constant">Provide a default behavior, which can be overriden in sub-classed</span>
+
+<span class="Constant">META: in the future this functionality may move into a separate class.</span>
+
+<span class="Constant">=back</span>
+
+<span class="Constant">Here are the current overridable methods:</span>
+
+<span class="Constant">META: these are all documented in RegistryCooker.pm, though not using</span>
+<span class="Constant">pod. please help to port these to pod and move the descriptions here.</span>
+
+<span class="Constant">=over</span>
+
+<span class="Constant">=item * new()</span>
+
+<span class="Constant">create the class's object, bless it and return it</span>
+
+<span class="Constant">  my </span><span class="Identifier">$obj</span><span class="Constant"> = </span><span class="Identifier">$class</span><span class="Identifier">-&gt;new</span><span class="Constant">(</span><span class="Identifier">$r</span><span class="Constant">);</span>
+
+<span class="Constant">C&lt;</span><span class="Identifier">$class</span><span class="Constant">&gt; -- the registry class, usually C&lt;__PACKAGE__&gt; can be used.</span>
+
+<span class="Constant">C&lt;</span><span class="Identifier">$r</span><span class="Constant">&gt; -- C&lt;Apache2::Request&gt; object.</span>
+
+<span class="Constant">default: new()</span>
+
+<span class="Constant">=item * init()</span>
+
+<span class="Constant">initializes the data object's fields: C&lt;REQ&gt;, C&lt;FILENAME&gt;,</span>
+<span class="Constant">C&lt;URI&gt;. Called from the new().</span>
+
+<span class="Constant">default: init()</span>
+
+<span class="Constant">=item * default_handler()</span>
+
+<span class="Constant">default:  default_handler()</span>
+
+<span class="Constant">=item * run()</span>
+
+<span class="Constant">default: run()</span>
+
+<span class="Constant">=item * can_compile()</span>
+
+<span class="Constant">default: can_compile()</span>
+
+<span class="Constant">=item * make_namespace()</span>
+
+<span class="Constant">default: make_namespace()</span>
+
+<span class="Constant">=item * namespace_root()</span>
+
+<span class="Constant">default: namespace_root()</span>
+
+
+<span class="Constant">=item * namespace_from()</span>
+
+<span class="Constant">If C&lt;namespace_from_uri&gt; is used and the script is called from the</span>
+<span class="Constant">virtual host, by default the virtual host name is prepended to the uri</span>
+<span class="Constant">when package name for the compiled script is created. Sometimes this</span>
+<span class="Constant">behavior is undesirable, e.g., when the same (physical) script is</span>
+<span class="Constant">accessed using the same path_info but different virtual hosts. In that</span>
+<span class="Constant">case you can make the script compiled only once for all vhosts, by</span>
+<span class="Constant">specifying:</span>
+
+<span class="Constant">  </span><span class="Identifier">$</span><span class="Type">ModPerl::RegistryCooker::</span><span class="Identifier">NameWithVirtualHost</span><span class="Constant"> = 0;</span>
+
+<span class="Constant">The drawback is that it affects the global environment and all other</span>
+<span class="Constant">scripts will be compiled ignoring virtual hosts.</span>
+
+<span class="Constant">default: namespace_from()</span>
+
+<span class="Constant">=item * is_cached()</span>
+
+<span class="Constant">default: is_cached()</span>
+
+<span class="Constant">=item * should_compile()</span>
+
+<span class="Constant">default: should_compile()</span>
+
+<span class="Constant">=item * flush_namespace()</span>
+
+<span class="Constant">default: flush_namespace()</span>
+
+
+<span class="Constant">=item * cache_table()</span>
+
+<span class="Constant">default: cache_table()</span>
+
+<span class="Constant">=item * cache_it()</span>
+
+<span class="Constant">default: cache_it()</span>
+
+<span class="Constant">=item * read_script()</span>
+
+<span class="Constant">default: read_script()</span>
+
+<span class="Constant">=item * shebang_to_perl()</span>
+
+<span class="Constant">default: shebang_to_perl()</span>
+
+<span class="Constant">=item * get_script_name()</span>
+
+<span class="Constant">default: get_script_name()</span>
+
+<span class="Constant">=item * chdir_file()</span>
+
+<span class="Constant">default: chdir_file()</span>
+
+<span class="Constant">=item * get_mark_line()</span>
+
+<span class="Constant">default: get_mark_line()</span>
+
+<span class="Constant">=item * compile()</span>
+
+<span class="Constant">default: compile()</span>
+
+
+<span class="Constant">=item * error_check()</span>
+
+<span class="Constant">default: error_check()</span>
+
+<span class="Constant">=item * strip_end_data_segment()</span>
+
+<span class="Constant">default: strip_end_data_segment()</span>
+
+<span class="Constant">=item * convert_script_to_compiled_handler()</span>
+
+<span class="Constant">default: convert_script_to_compiled_handler()</span>
+
+<span class="Constant">=back</span>
+
+
+
+
+<span class="Constant">=head2 Special Predefined Functions</span>
+
+<span class="Constant">The following functions are implemented as constants.</span>
+
+<span class="Constant">=over</span>
+
+<span class="Constant">=item * NOP()</span>
+
+<span class="Constant">Use when the function shouldn't do anything.</span>
+
+<span class="Constant">=item * TRUE()</span>
+
+<span class="Constant">Use when a function should always return a true value.</span>
+
+<span class="Constant">=item * FALSE()</span>
+
+<span class="Constant">Use when a function should always return a false value.</span>
+
+<span class="Constant">=back</span>
+
+
+
+
+<span class="Constant">=head1 Sub-classing Techniques</span>
+
+<span class="Constant">To override the default C&lt;ModPerl::RegistryCooker&gt; methods, first,</span>
+<span class="Constant">sub-class C&lt;ModPerl::RegistryCooker&gt; or one of its existing</span>
+<span class="Constant">sub-classes, using C&lt;use base&gt;. Second, override the methods.</span>
+
+<span class="Constant">Those methods that weren't overridden will be resolved at run time</span>
+<span class="Constant">when used for the first time and cached for the future requests. One</span>
+<span class="Constant">way to to shortcut this first run resolution is to use the symbol</span>
+<span class="Constant">aliasing feature. For example to alias C&lt;ModPerl::MyRegistry::flush_namespace&gt;</span>
+<span class="Constant">as C&lt;ModPerl::RegistryCooker::flush_namespace&gt;, you can do:</span>
+
+<span class="Constant">  package ModPerl::MyRegistry;</span>
+<span class="Constant">  use base qw(ModPerl::RegistryCooker);</span>
+<span class="Constant">  *ModPerl::MyRegistry::flush_namespace =</span>
+<span class="Constant">      </span><span class="Special">\&amp;</span><span class="Constant">ModPerl::RegistryCooker::flush_namespace;</span>
+<span class="Constant">  1;</span>
+
+<span class="Constant">In fact, it's a good idea to explicitly alias all the methods so you</span>
+<span class="Constant">know exactly what functions are used, rather then relying on the</span>
+<span class="Constant">defaults. For that purpose C&lt;ModPerl::RegistryCooker&gt; class method</span>
+<span class="Constant">install_aliases() can be used. Simply prepare a hash with method names</span>
+<span class="Constant">in the current package as keys and corresponding fully qualified</span>
+<span class="Constant">methods to be aliased for as values and pass it to</span>
+<span class="Constant">install_aliases(). Continuing our example we could do:</span>
+
+<span class="Constant">  package ModPerl::MyRegistry;</span>
+<span class="Constant">  use base qw(ModPerl::RegistryCooker);</span>
+<span class="Constant">  my %aliases = (</span>
+<span class="Constant">      flush_namespace =&gt; 'ModPerl::RegistryCooker::flush_namespace',</span>
+<span class="Constant">  );</span>
+<span class="Constant">  __PACKAGE__-&gt;install_aliases(</span><span class="Special">\%</span><span class="Constant">aliases);</span>
+<span class="Constant">  1;</span>
+
+<span class="Constant">The values use fully qualified packages so you can mix methods from</span>
+<span class="Constant">different classes.</span>
+
+<span class="Constant">=head1 Examples</span>
+
+<span class="Constant">The best examples are existing core registry modules:</span>
+<span class="Constant">C&lt;L&lt;ModPerl::Registry&gt;&gt;, C&lt;L&lt;ModPerl::Registry&gt;&gt; and</span>
+<span class="Constant">C&lt;L&lt;ModPerl::RegistryBB&gt;&gt;. Look at the source code and their manpages</span>
+<span class="Constant">to see how they subclass C&lt;ModPerl::RegistryCooker&gt;.</span>
+
+<span class="Constant">For example by default C&lt;L&lt;ModPerl::Registry&gt;&gt; uses the script's path</span>
+<span class="Constant">when creating a package's namespace. If for example you want to use a</span>
+<span class="Constant">uri instead you can override it with:</span>
+
+<span class="Constant">  *ModPerl::MyRegistry::namespace_from =</span>
+<span class="Constant">      </span><span class="Special">\&amp;</span><span class="Constant">ModPerl::RegistryCooker::namespace_from_uri;</span>
+<span class="Constant">  1;</span>
+
+<span class="Constant">Since the C&lt;namespace_from_uri&gt; component already exists in</span>
+<span class="Constant">C&lt;ModPerl::RegistryCooker&gt;. If you want to write your own method,</span>
+<span class="Constant">e.g., that creates a namespace based on the inode, you can do:</span>
+
+<span class="Constant">  sub namespace_from_inode {</span>
+<span class="Constant">      my </span><span class="Identifier">$self</span><span class="Constant"> = shift;</span>
+<span class="Constant">      return (stat </span><span class="Identifier">$self-&gt;[</span>FILENAME<span class="Identifier">]</span><span class="Constant">)[1];</span>
+<span class="Constant">  }</span>
+
+<span class="Constant">META: when </span><span class="Identifier">$r</span><span class="Constant">-E&lt;gt&gt;finfo will be ported it'll be more effecient. </span>
+<span class="Constant">(stat </span><span class="Identifier">$r</span><span class="Constant">-E&lt;gt&gt;finfo)[1]</span>
+
+
+<span class="Constant">=head1 Authors</span>
+
+<span class="Constant">Doug MacEachern</span>
+
+<span class="Constant">Stas Bekman</span>
+
+<span class="Constant">=head1 See Also</span>
+
+<span class="Constant">C&lt;L&lt;ModPerl::Registry|docs::2.0::api::ModPerl::Registry&gt;&gt;,</span>
+<span class="Constant">C&lt;L&lt;ModPerl::RegistryBB|docs::2.0::api::ModPerl::RegistryBB&gt;&gt; and</span>
+<span class="Constant">C&lt;L&lt;ModPerl::PerlRun|docs::2.0::api::ModPerl::PerlRun&gt;&gt;.</span>
+
+<span class="Constant">=cut</span>
+</pre>
+</body>
+</html>
